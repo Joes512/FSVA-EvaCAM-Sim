@@ -1,0 +1,3 @@
+[submodule "EvaCAM"]
+	path = EvaCAM
+	url = https://github.com/eva-cam/EvaCAM.git
