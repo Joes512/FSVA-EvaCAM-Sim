@@ -1,84 +1,43 @@
 from collections import defaultdict
+from tqdm import tqdm
 
-# Define the encoding for each base
-base_encoding = {
-    "A": "0*01",
-    "C": "11*0",
-    "T": "10*0",
-    "G": "0*11",
-    "N": "****",  # N for unknown base
-}
-
-def encode_sequence(sequence):
+def generate_seeds(read, seed_length):
     """
-    :param sequence: DNA Sequence (string, e.g., "ACTG")
-    :return: Sequence after encoding (list of strings)
-    """
-    encoded_sequence = []
-    for base in sequence:
-        if base in base_encoding:
-            encoded_sequence.append(base_encoding[base])
-        else:
-            encoded_sequence.append("????") # Placeholder for unknown base
-    return encoded_sequence
-
-
-def generate_encoded_seeds(read, seed_length):
-    """
-    :param read: Gene read data (string)
-    :param read:(string)
-    :param seed_length:  (int)
-    :return: (list of list of strings)
+    將讀取序列分解為固定長度的種子。
+    :param read: 待處理的基因讀取數據 (string)
+    :param seed_length: 種子長度 (int)
+    :return: 種子列表 (list of strings)
     """
     seeds = []
     for i in range(len(read) - seed_length + 1):
-        seed = read[i:i + seed_length]
-        encoded_seed = encode_sequence(seed)
-        seeds.append(encoded_seed)
+        seeds.append(read[i:i + seed_length])
     return seeds
 
 
-def tcam_lookup_with_encoding(encoded_seed, encoded_reference, max_hamming_distance):
+def tcam_lookup(seed, reference, max_hamming_distance):
     """
-    :param encoded_seed: (list of strings)
-    :param encoded_reference: (list of strings)
-    :param max_hamming_distance: (int)
+    模擬 TCAM 查找過程，支持近似匹配。
+    :param seed: 待查找的種子 (string)
+    :param reference: 參考基因組 (string)
+    :param max_hamming_distance: 最大 Hamming 距離 (int)
     :return: 匹配位置列表 (list of int)
     """
     matches = []
-    seed_length = len(encoded_seed)
-    for i in range(len(encoded_reference) - seed_length + 1):
-        reference_window = encoded_reference[i:i + seed_length]
-        mismatches = 0
-        for seed_base, ref_base in zip(encoded_seed, reference_window):
-            if not match_with_wildcard(seed_base, ref_base):
-                mismatches += 1
-                if mismatches > max_hamming_distance:
-                    break
+    for i in range(len(reference) - len(seed) + 1):
+        window = reference[i:i + len(seed)]
+        # 計算 Hamming 距離
+        mismatches = sum(1 for a, b in zip(seed, window) if a != b)
         if mismatches <= max_hamming_distance:
             matches.append(i)
     return matches
 
-def match_with_wildcard(encoded_base, encoded_reference):
-    """
-    Check if the encoded base matches the encoded reference.
-    :param encoded_base: (string)
-    :param encoded_reference: (string)
-    :return:(bool)
-    """
-    for b, r in zip(encoded_base, encoded_reference):
-        if b != "*" and r != "*" and b != r:
-            return False
-    return True
-
-
 
 def voting(matches, locality_size):
     """
-    Count votes for each locality.
-    :param matches: (list of int)
-    :param locality_size: (int)
-    :return: (dict of int -> int)
+    根據種子匹配結果統計投票數。
+    :param matches: 匹配位置列表 (list of int)
+    :param locality_size: 投票區域大小 (int)
+    :return: 投票計數字典 (dict of int -> int)
     """
     vote_counts = defaultdict(int)
     for match in matches:
@@ -89,10 +48,10 @@ def voting(matches, locality_size):
 
 def filtering(vote_counts, vote_threshold):
     """
-    filter the candidates with the given vote threshold.
-    :param vote_counts: (dict of int -> int)
-    :param vote_threshold:(int)
-    :return: (list of int)
+    根據投票數過濾候選位置。
+    :param vote_counts: 投票計數字典 (dict of int -> int)
+    :param vote_threshold: 投票數門檻 (int)
+    :return: 候選位置列表 (list of int)
     """
     candidates = [position for position, count in vote_counts.items() if count >= vote_threshold]
     return candidates
@@ -100,10 +59,10 @@ def filtering(vote_counts, vote_threshold):
 
 def smith_waterman(query, reference):
     """
-    Perform Smith-Waterman algorithm to find the best alignment score.
-    :param query:(string)
-    :param reference:(string)
-    :return:(int)
+    使用 Smith-Waterman 演算法執行局部比對。
+    :param query: 待比對的序列 (string)
+    :param reference: 參考基因組 (string)
+    :return: 最佳比對分數 (int)
     """
     m, n = len(query), len(reference)
     dp = [[0] * (n + 1) for _ in range(m + 1)]
@@ -120,44 +79,57 @@ def smith_waterman(query, reference):
     return max_score
 
 
-def fsva_with_encoding(read, reference, seed_length, max_hamming_distance, locality_size, vote_threshold):
+
+def fsva(read, reference, seed_length, max_hamming_distance, locality_size, vote_threshold):
     """
-    :param read:(string)
-    :param reference:(string)
-    :param seed_length:(int)
-    :param max_hamming_distance:(int)
-    :param locality_size:int)
-    :param vote_threshold:(int)
-    :return:(list of int)
+    完整的 Fast Seed-and-Vote Algorithm (FSVA)。
+    :param read: 基因讀取數據 (string)
+    :param reference: 參考基因組 (string)
+    :param seed_length: 種子長度 (int)
+    :param max_hamming_distance: 最大 Hamming 距離 (int)
+    :param locality_size: 投票區域大小 (int)
+    :param vote_threshold: 投票數門檻 (int)
+    :return: 候選位置和其對應的匹配分數 (list of tuple)
     """
-    # Encode the read and reference
-    encoded_read = encode_sequence(read)
-    encoded_reference = encode_sequence(reference)
-    
-    # Parse the read into fixed-length seeds and encode them
-    encoded_seeds = generate_encoded_seeds(read, seed_length)
-    
-    # TCAM lookup
+    seeds = generate_seeds(read, seed_length)
     all_matches = []
-    for encoded_seed in encoded_seeds:
-        matches = tcam_lookup_with_encoding(encoded_seed, encoded_reference, max_hamming_distance)
+    for seed in seeds:
+        matches = tcam_lookup(seed, reference, max_hamming_distance)
         all_matches.extend(matches)
     
-    # Voting and filtering
     vote_counts = voting(all_matches, locality_size)
     candidates = filtering(vote_counts, vote_threshold)
     
-    return candidates
+    results = []
+    for candidate in tqdm(candidates):
+        query_segment = read
+        reference_segment = reference[candidate:candidate + len(read)]
+        score = smith_waterman(query_segment, reference_segment)
+        results.append((candidate, score))
+    
+    return results
 
+# 主程式執行
+with open('reference.txt', 'r', encoding='utf-8') as ref_file:
+    reference = ref_file.read().replace('\n', '')
+    # print(reference)
+    
 
+with open('971_200.txt', 'r', encoding='utf-8') as read_file:
+    read = read_file.read().replace('\n', '')
 
-read = "ACGTACGT"
-reference = "ACGTACGTACGTACGT"
 seed_length = 4
 max_hamming_distance = 1
 locality_size = 4
 vote_threshold = 2
 
-candidates = fsva_with_encoding(read, reference, seed_length, max_hamming_distance, locality_size, vote_threshold)
-print("候選位置:", candidates)
+# 執行 FSVA
+results = fsva(read, reference, seed_length, max_hamming_distance, locality_size, vote_threshold)
 
+# 根據分數排序，取分數最高的三個結果
+top_results = sorted(results, key=lambda x: x[1], reverse=True)[:3]
+
+# 輸出結果
+print("分數最高的三個匹配位置與分數:")
+for position, score in top_results:
+    print(f"位置: {position}, 分數: {score}")
